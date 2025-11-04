@@ -1,5 +1,5 @@
 import http from 'http';
-import fs from 'fs/promises';
+import fs from 'fs';
 import url from 'url';
 import { program } from 'commander';
 import { XMLBuilder } from 'fast-xml-parser';
@@ -24,63 +24,71 @@ const builder = new XMLBuilder({
     format: true,
 });
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const queryParams = parsedUrl.query;
 
-  let data;
-  try {
-    const fileContent = await fs.readFile(input_file_path, 'utf8');
-    data = JSON.parse(fileContent);
-
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.error('Cannot find input file');
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Cannot find input file');
-    } else {
-      console.error('Internal Server Error');
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Internal Server Error');
+  fs.readFile(input_file_path, 'utf8', (error, fileContent)=> {
+    if (error) {
+      if (error.code === 'ENOENT') {
+        console.error('Cannot find input file');
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Cannot find input file');
+      } else {
+        console.error('Internal Server Error');
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Internal Server Error');
+      }
+      return;
     }
-    return;
-  }
 
-  let processedData = data;
+    let data;
+    try {
+      data = JSON.parse(fileContent);
+    }
+    catch (parseError) {
+      console.error("Error parsing JSON");
+      res.writeHead(500, {'Content-Type': 'text/plain; charset=utf-8'});
+      res.end('Parse JSON error');
+      return;
+    }
 
-  if (queryParams.min_rainfall) {
-    const minRain = parseFloat(queryParams.min_rainfall);
-    processedData = processedData.filter(item => item.Rainfall > minRain);
-  }
+    let processedData = data;
 
-  const mappedData = processedData.map(item => {
-    const record = {
-      rainfall: item.Rainfall,
-      pressure3pm: item.Pressure3pm,
+    if (queryParams.min_rainfall) {
+      const minRain = parseFloat(queryParams.min_rainfall);
+      processedData = processedData.filter(item => item.Rainfall > minRain);
+    } 
+
+    const mappedData = processedData.map(item => {
+      const record = {
+        rainfall: item.Rainfall,
+        pressure3pm: item.Pressure3pm,
+      };
+
+      if (queryParams.humidity === 'true') {
+        record.humidity = item.Humidity3pm;
+      }
+      return record;
+    });
+
+    const xmlObject = {
+      weather_data: {
+        record: mappedData
+      }
     };
 
-    if (queryParams.humidity === 'true') {
-      record.humidity = item.Humidity3pm;
-    }
-    return record;
-  });
+    try {
+      const xmlString = builder.build(xmlObject);
+      res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
+      res.end(xmlString);
 
-  const xmlObject = {
-    weather_data: {
-      record: mappedData
-    }
-  };
-
-  try {
-    const xmlString = builder.build(xmlObject);
-    res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
-    res.end(xmlString);
-
-  } catch (error) {
+    } catch (error) {
       console.error('Error generating XML');
       res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Error generating XML');
-  }
+    }
+  });
 });
 
 server.listen(options.port, options.host, () => {
